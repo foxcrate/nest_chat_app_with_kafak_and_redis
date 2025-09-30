@@ -1,4 +1,3 @@
-// chat.gateway.ts
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -12,26 +11,23 @@ import { Server, Socket } from 'socket.io';
 import * as jwt from 'jsonwebtoken';
 import { Cache, CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Inject } from '@nestjs/common';
-
-interface MessagePayload {
-  senderId: string;
-  receiverId: string;
-  message: string;
-}
+import { MessagePayload } from './dtos/message-payload.interface';
+import { MessageService } from 'src/message/message.service';
+import { ProducerService } from 'src/kafka/producer.service';
 
 @WebSocketGateway({ cors: true })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
-  constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache) {}
-
-  // keep track of connected users
-  private users = new Map<string, string>(); // userId -> socketId
+  constructor(
+    @Inject(CACHE_MANAGER) private cacheManager: Cache,
+    private readonly messageService: MessageService,
+    private readonly producerService: ProducerService,
+  ) {}
 
   async handleConnection(client: Socket) {
     try {
-      // 🔹 Extract token from handshake auth
       const token =
         client.handshake.auth?.token ||
         client.handshake.headers?.authorization?.split(' ')[1];
@@ -42,21 +38,29 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         return;
       }
 
-      // 🔹 Verify token
       const decoded: any = jwt.verify(
         token,
         process.env.JWT_SECRET || 'secretKey',
       );
 
-      // Attach userId to socket
-      client.data.userId = decoded.sub; // assume JWT has "sub" = userId
-      // this.users.set(decoded.sub, client.id);
-      console.log('decoded.sub: ', decoded.sub);
-      console.log('client.id: ', client.id);
+      client.data.userId = decoded.sub;
 
       await this.cacheManager.set(`user-${decoded.sub}`, client.id);
 
       console.log(`✅ Client connected: ${client.id}, userId: ${decoded.sub}`);
+
+      // Deliver pending messages
+      await this.producerService.produce({
+        topic: 'deliver-messages',
+        messages: [
+          {
+            value: JSON.stringify({
+              userId: decoded.sub,
+              socketId: client.id,
+            }),
+          },
+        ],
+      });
     } catch (err) {
       console.log(`❌ Invalid token for client ${client.id}`);
       client.disconnect();
@@ -65,11 +69,11 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   handleDisconnect(client: Socket) {
     console.log(`Client disconnected: ${client.id}`);
-    for (const [userId, socketId] of this.users.entries()) {
-      if (socketId === client.id) {
-        this.users.delete(userId);
-        break;
-      }
+
+    const userId = client.data.userId;
+    if (userId) {
+      this.cacheManager.del(`user-${userId}`);
+      console.log(`🗑️ Removed user ${userId} from cache`);
     }
   }
 
@@ -78,7 +82,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() payload: MessagePayload,
     @ConnectedSocket() client: Socket,
   ) {
-    const senderId = client.data.userId; // get from token
+    const senderId = client.data.userId;
     console.log('senderId: ', senderId);
 
     if (!senderId) {
@@ -87,7 +91,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
     console.log('Received private message:', payload);
 
-    // const receiverSocketId = this.users.get(payload.receiverId);
     const receiverSocketId = await this.cacheManager.get(
       `user-${payload.receiverId}`,
     );
@@ -97,6 +100,21 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.server
         .to(receiverSocketId.toString())
         .emit('private_message', payload);
+      //save message to db
+      await this.messageService.createMessage(
+        senderId,
+        Number(payload.receiverId),
+        payload.message,
+        true,
+      );
+    } else {
+      // user is offline, save for later
+      await this.messageService.createMessage(
+        senderId,
+        Number(payload.receiverId),
+        payload.message,
+        false,
+      );
     }
   }
 }

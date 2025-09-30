@@ -13,6 +13,4 @@ export class PrismaService
   async onModuleDestroy() {
     await this.$disconnect();
   }
-
-  // Optionally add helpers for transactions, etc.
 }

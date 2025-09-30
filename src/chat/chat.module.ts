@@ -5,6 +5,10 @@ import { CacheModule } from '@nestjs/cache-manager';
 import KeyvRedis from '@keyv/redis';
 import { Keyv } from 'keyv';
 import { CacheableMemory } from 'cacheable';
+import { MessageService } from 'src/message/message.service';
+import { ProducerService } from 'src/kafka/producer.service';
+import { OldMessagesConsumer } from './job-consumers/old-messages.consumer';
+import { KafkaModule } from 'src/kafka/kafka.module';
 
 @Module({
   imports: [
@@ -20,8 +24,15 @@ import { CacheableMemory } from 'cacheable';
         };
       },
     }),
+    KafkaModule,
   ],
 
-  providers: [ChatGateway],
+  providers: [
+    ChatGateway,
+    MessageService,
+    ProducerService,
+    OldMessagesConsumer,
+  ],
+  exports: [ChatGateway],
 })
 export class ChatModule {}
