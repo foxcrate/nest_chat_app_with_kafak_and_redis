@@ -8,8 +8,8 @@ import {
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto, LoginDto } from './dto/auth.dto';
-import { JwtAuthGuard } from './jwt.guard';
-import { GetUser } from './get-user.decorator';
+import { JwtAuthGuard } from './guards/jwt.guard';
+import { GetUser } from './decorators/get-user.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { CompleteUserDto } from './dto/complete-user.dto';
 
